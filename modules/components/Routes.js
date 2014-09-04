@@ -1,5 +1,6 @@
 var React = require('react');
 var warning = require('react/lib/warning');
+var invariant = require('react/lib/invariant');
 var copyProperties = require('react/lib/copyProperties');
 var canUseDOM = require('react/lib/ExecutionEnvironment').canUseDOM;
 var Promise = require('when/lib/Promise');
@@ -11,6 +12,7 @@ var RouteStore = require('../stores/RouteStore');
 var Path = require('../utils/Path');
 var Redirect = require('../utils/Redirect');
 var Transition = require('../utils/Transition');
+var resolveProperties = require('../utils/resolveProperties');
 
 /**
  * The ref name that can be used to reference the active route component.
@@ -45,9 +47,6 @@ function defaultTransitionErrorHandler(error) {
   });
 }
 
-/**
- * Updates the window's scroll position given the current route.
- */
 function maybeUpdateScroll(routes) {
   if (!canUseDOM)
     return;
@@ -73,7 +72,7 @@ var Routes = React.createClass({
   propTypes: {
     onAbortedTransition: React.PropTypes.func.isRequired,
     onTransitionError: React.PropTypes.func.isRequired,
-    preserveScrollPosition: React.PropTypes.bool
+    preserveScrollPosition: React.PropTypes.bool.isRequired
   },
 
   getDefaultProps: function () {
@@ -140,39 +139,32 @@ var Routes = React.createClass({
    * Router.replaceWith, or Router.goBack instead.
    */
   updatePath: function (path) {
-    var routes = this;
     var transition = new Transition(path);
 
-    return runTransitionHooks(routes, transition)
-      .then(function (newState) {
-        if (transition.isAborted)
-          routes.props.onAbortedTransition(transition);
+    return syncWithTransition(this, transition).then(
+      function () {
+        if (transition.isAborted) {
+          this.props.onAbortedTransition(transition);
+        } else {
+          maybeUpdateScroll(this);
+        }
 
-        if (newState == null)
-          return transition;
-
-        return new Promise(function (resolve) {
-          routes.setState(newState, function () {
-            routes.emitChange();
-            maybeUpdateScroll(routes);
-            resolve(transition);
-          });
-        });
-      })
-      .then(undefined, this.props.onTransitionError);
+        return transition;
+      }.bind(this)
+    ).then(
+      undefined, this.props.onTransitionError
+    );
   },
 
   render: function () {
-    if (!this.state.path)
+    var matches = this.state.matches;
+
+    if (!matches || !matches.length)
       return null;
 
-    var matches = this.state.matches;
-    if (matches.length) {
-      // matches[0] corresponds to the top-most match
-      return matches[0].route.props.handler(computeHandlerProps(matches, this.state.activeQuery));
-    } else {
-      return null;
-    }
+    return matches[0].route.props.handler(
+      computeHandlerProps(matches, this.state.activeQuery)
+    );
   }
 
 });
@@ -248,17 +240,15 @@ function updateMatchComponents(matches, refs) {
 }
 
 /**
- * Runs all transition hooks that are required to get from the current state
- * to the state specified by the given transition and updates the current state
- * if they all pass successfully. Returns a promise that resolves to the new
- * state if it needs to be updated, or undefined if not.
+ * Runs all willTransition* hooks, computes and sets new state for routes,
+ * and returns a promise that resolves after all didTransition* hooks run.
  */
-function runTransitionHooks(routes, transition) {
-  if (routes.state.path === transition.path)
+function syncWithTransition(component, transition) {
+  if (component.state.path === transition.path)
     return Promise.resolve(); // Nothing to do!
 
-  var currentMatches = routes.state.matches;
-  var nextMatches = routes.match(transition.path);
+  var currentMatches = component.state.matches;
+  var nextMatches = component.match(transition.path);
 
   warning(
     nextMatches,
@@ -271,7 +261,7 @@ function runTransitionHooks(routes, transition) {
 
   var fromMatches, toMatches;
   if (currentMatches) {
-    updateMatchComponents(currentMatches, routes.refs);
+    updateMatchComponents(currentMatches, component.refs);
 
     fromMatches = currentMatches.filter(function (match) {
       return !hasMatch(nextMatches, match);
@@ -287,57 +277,70 @@ function runTransitionHooks(routes, transition) {
 
   var query = Path.extractQuery(transition.path) || {};
 
-  return runTransitionFromHooks(fromMatches, transition).then(function () {
-    if (transition.isAborted)
+  try {
+    runWillTransitionFromHooks(fromMatches, transition);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
+  if (transition.isAborted)
+    return; // No need to continue.
+
+  return runWillTransitionToHooks(toMatches, transition, query).then(function () {
+    if (transition.isAborted || !component.isMounted())
       return; // No need to continue.
 
-    return runTransitionToHooks(toMatches, transition, query).then(function () {
-      if (transition.isAborted)
-        return; // No need to continue.
-
+    return new Promise(function (resolve, reject) {
       var rootMatch = getRootMatch(nextMatches);
       var params = (rootMatch && rootMatch.params) || {};
+      var routes = nextMatches.map(function (match) {
+        return match.route;
+      });
 
-      return {
+      runDidTransitionFromHooks(fromMatches);
+      runDidTransitionToHooks(toMatches, query, component);
+
+      if (currentMatches) {
+        currentMatches.forEach(function (match) {
+          match.isStale = true;
+        });
+      }
+
+      component.setState({
         path: transition.path,
         matches: nextMatches,
+        activeRoutes: routes,
         activeParams: params,
-        activeQuery: query,
-        activeRoutes: nextMatches.map(function (match) {
-          return match.route;
-        })
-      };
+        activeQuery: query
+      }, function () {
+        try {
+          component.emitChange();
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      })
     });
   });
 }
 
 /**
- * Calls the willTransitionFrom hook of all handlers in the given matches
- * serially in reverse with the transition object and the current instance of
- * the route's handler, so that the deepest nested handlers are called first.
- * Returns a promise that resolves after the last handler.
+ * Runs the willTransitionFrom hook of all handlers serially in reverse.
  */
-function runTransitionFromHooks(matches, transition) {
-  var promise = Promise.resolve();
-
+function runWillTransitionFromHooks(matches, transition) {
   reversedArray(matches).forEach(function (match) {
-    promise = promise.then(function () {
-      var handler = match.route.props.handler;
+    var handler = match.route.props.handler;
 
-      if (!transition.isAborted && handler.willTransitionFrom)
-        return handler.willTransitionFrom(transition, match.component);
-    });
+    if (!transition.isAborted && handler.willTransitionFrom)
+      handler.willTransitionFrom(transition, match.component);
   });
-
-  return promise;
 }
 
 /**
- * Calls the willTransitionTo hook of all handlers in the given matches serially
- * with the transition object and any params that apply to that handler. Returns
- * a promise that resolves after the last handler.
+ * Runs the willTransitionTo hook of all handlers serially and returns
+ * a promise that resolves after the last handler is finished.
  */
-function runTransitionToHooks(matches, transition, query) {
+function runWillTransitionToHooks(matches, transition, query) {
   var promise = Promise.resolve();
 
   matches.forEach(function (match) {
@@ -353,36 +356,80 @@ function runTransitionToHooks(matches, transition, query) {
 }
 
 /**
+ * Runs the didTransitionFrom hook of all handlers serially in reverse.
+ */
+function runDidTransitionFromHooks(matches) {
+  reversedArray(matches).forEach(function (match) {
+    var handler = match.route.props.handler;
+
+    if (handler.didTransitionFrom)
+      handler.didTransitionFrom();
+  });
+}
+
+/**
+ * Runs the didTransitionTo hook of all handlers serially.
+ */
+function runDidTransitionToHooks(matches, query, component) {
+  matches.forEach(function (match) {
+    var handler = match.route.props.handler;
+
+    function setProps(newProps, callback) {
+      if (match.isStale) {
+        warning(
+          !component.isMounted(),
+          'setProps called from %s.didTransitionTo after transitioning away. Be sure ' +
+          'to clean up all data subscribers in didTransitionFrom',
+          handler.displayName || 'UnnamedRouteHandler'
+        );
+
+        return; // no-op
+      }
+
+      invariant(
+        component.isMounted(),
+        'setProps called from %s.didTransitionTo after its <Routes> was unmounted',
+        handler.displayName || 'UnnamedRouteHandler'
+      );
+
+      copyProperties(match.props || (match.props = {}), newProps);
+      component.forceUpdate(callback);
+    }
+
+    if (handler.didTransitionTo)
+      handler.didTransitionTo(match.params, query, setProps);
+  });
+}
+
+/**
  * Given an array of matches as returned by findMatches, return a descriptor for
  * the handler hierarchy specified by the route.
  */
 function computeHandlerProps(matches, query) {
+  var childHandler = returnNull;
   var props = {
     ref: null,
     key: null,
     params: null,
     query: null,
-    activeRouteHandler: returnNull
+    activeRouteHandler: childHandler
   };
 
-  var childHandler;
   reversedArray(matches).forEach(function (match) {
     var route = match.route;
 
     props = Route.getUnreservedProps(route.props);
 
-    props.ref = REF_NAME;
-    props.params = match.params;
-    props.query = query;
+    if (match.props)
+      copyProperties(props, match.props);
 
     if (route.props.addHandlerKey)
       props.key = Path.injectParams(route.props.path, match.params);
 
-    if (childHandler) {
-      props.activeRouteHandler = childHandler;
-    } else {
-      props.activeRouteHandler = returnNull;
-    }
+    props.ref = REF_NAME;
+    props.params = match.params;
+    props.query = query;
+    props.activeRouteHandler = childHandler;
 
     childHandler = function (props, addedProps) {
       if (arguments.length > 2 && typeof arguments[2] !== 'undefined')

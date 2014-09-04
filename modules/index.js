@@ -10,6 +10,5 @@ exports.Route = require('./components/Route');
 exports.Routes = require('./components/Routes');
 
 exports.ActiveState = require('./mixins/ActiveState');
-exports.AsyncState = require('./mixins/AsyncState');
 
 exports.makeHref = require('./utils/makeHref');
