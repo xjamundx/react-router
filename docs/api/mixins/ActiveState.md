@@ -55,4 +55,3 @@ var Tab = React.createClass({
 // with an automatic `active` class on both.
 <Tab to="foo">Foo</Tab>
 ```
-

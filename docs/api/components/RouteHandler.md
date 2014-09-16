@@ -78,6 +78,21 @@ want to allow the transition.
 
 See also: [transition](/docs/api/misc/transition.md)
 
+### `didTransitionTo(params, query, setProps)`
+
+Called when the transition to a component is complete, just before it
+is rendered. The `setProps` function may be used to set props on the
+component instance. Any props that are set immediately will be present
+on the initial render. Others may be added asynchronously. This is a
+good place to load data from a server or setup a subscriber on a
+flux-style store.
+
+### `didTransitionFrom()`
+
+Called when the router has transitioned to another component and this
+router handler is no longer being rendered. This is a good place to cleanup
+subscribers that were registered in `didTransitionTo`.
+
 #### Example
 
 ```js

@@ -12,7 +12,6 @@ var RouteStore = require('../stores/RouteStore');
 var Path = require('../utils/Path');
 var Redirect = require('../utils/Redirect');
 var Transition = require('../utils/Transition');
-var resolveProperties = require('../utils/resolveProperties');
 
 /**
  * The ref name that can be used to reference the active route component.
