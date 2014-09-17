@@ -1,6 +1,5 @@
 var React = require('react');
 var warning = require('react/lib/warning');
-var invariant = require('react/lib/invariant');
 var copyProperties = require('react/lib/copyProperties');
 var canUseDOM = require('react/lib/ExecutionEnvironment').canUseDOM;
 var Promise = require('when/lib/Promise');
@@ -159,6 +158,11 @@ var Routes = React.createClass({
     var matches = this.state.matches;
 
     if (!matches || !matches.length)
+      return null;
+
+    var firstMatch = matches[0];
+
+    if (!firstMatch.shouldRender)
       return null;
 
     return matches[0].route.props.handler(
@@ -373,6 +377,8 @@ function runDidTransitionToHooks(matches, query, component) {
   matches.forEach(function (match) {
     var handler = match.route.props.handler;
 
+    match.props = {};
+
     function setProps(newProps, callback) {
       if (match.isStale) {
         warning(
@@ -381,22 +387,24 @@ function runDidTransitionToHooks(matches, query, component) {
           'to clean up all data subscribers in didTransitionFrom',
           handler.displayName || 'UnnamedRouteHandler'
         );
+      } else {
+        copyProperties(match.props, newProps);
 
-        return; // no-op
+        if (handler.shouldHandlerRender)
+          match.shouldRender = !!handler.shouldHandlerRender(match.props);
+
+        if (component.isMounted())
+          component.forceUpdate(callback);
       }
-
-      invariant(
-        component.isMounted(),
-        'setProps called from %s.didTransitionTo after its <Routes> was unmounted',
-        handler.displayName || 'UnnamedRouteHandler'
-      );
-
-      copyProperties(match.props || (match.props = {}), newProps);
-      component.forceUpdate(callback);
     }
 
     if (handler.didTransitionTo)
       handler.didTransitionTo(match.params, query, setProps);
+
+    // Manually call handler.shouldHandlerRender if
+    // handler.didTransitionTo doesn't immediately setProps.
+    if (match.shouldRender == null)
+      match.shouldRender = handler.shouldHandlerRender ? !!handler.shouldHandlerRender(match.props) : true;
   });
 }
 
@@ -430,12 +438,16 @@ function computeHandlerProps(matches, query) {
     props.query = query;
     props.activeRouteHandler = childHandler;
 
-    childHandler = function (props, addedProps) {
-      if (arguments.length > 2 && typeof arguments[2] !== 'undefined')
-        throw new Error('Passing children to a route handler is not supported');
+    if (match.shouldRender) {
+      childHandler = function (props, addedProps) {
+        if (arguments.length > 2 && typeof arguments[2] !== 'undefined')
+          throw new Error('Passing children to a route handler is not supported');
 
-      return route.props.handler(copyProperties(props, addedProps));
-    }.bind(this, props);
+        return route.props.handler(copyProperties(props, addedProps));
+      }.bind(this, props);
+    } else {
+      childHandler = returnNull;
+    }
   });
 
   return props;
