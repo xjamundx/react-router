@@ -383,15 +383,15 @@ function runDidTransitionToHooks(matches, query, component) {
       if (match.isStale) {
         warning(
           !component.isMounted(),
-          'setProps called from %s.didTransitionTo after transitioning away. Be sure ' +
-          'to clean up all data subscribers in didTransitionFrom',
+          'setProps called from %s.didTransitionTo after transitioning away. ' +
+          'Be sure to clean up all data subscribers in didTransitionFrom',
           handler.displayName || 'UnnamedRouteHandler'
         );
       } else {
         copyProperties(match.props, newProps);
 
-        if (handler.shouldHandlerRender)
-          match.shouldRender = !!handler.shouldHandlerRender(match.props);
+        if (handler.shouldRenderWithProps)
+          match.shouldRender = !!handler.shouldRenderWithProps(match.props);
 
         if (component.isMounted())
           component.forceUpdate(callback);
@@ -401,10 +401,10 @@ function runDidTransitionToHooks(matches, query, component) {
     if (handler.didTransitionTo)
       handler.didTransitionTo(match.params, query, setProps);
 
-    // Manually call handler.shouldHandlerRender if
+    // Manually call handler.shouldRenderWithProps if
     // handler.didTransitionTo doesn't immediately setProps.
     if (match.shouldRender == null)
-      match.shouldRender = handler.shouldHandlerRender ? !!handler.shouldHandlerRender(match.props) : true;
+      match.shouldRender = handler.shouldRenderWithProps ? !!handler.shouldRenderWithProps(match.props) : true;
   });
 }
 
