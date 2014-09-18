@@ -83,6 +83,7 @@ var Routes = React.createClass({
 
   getInitialState: function () {
     return {
+      matches: [],
       routes: RouteStore.registerChildren(this.props.children, this)
     };
   },
@@ -263,7 +264,7 @@ function syncWithTransition(component, transition) {
     nextMatches = [];
 
   var fromMatches, toMatches;
-  if (currentMatches) {
+  if (currentMatches.length) {
     updateMatchComponents(currentMatches, component.refs);
 
     fromMatches = currentMatches.filter(function (match) {
@@ -294,24 +295,24 @@ function syncWithTransition(component, transition) {
       return; // No need to continue.
 
     return new Promise(function (resolve, reject) {
-      var rootMatch = getRootMatch(nextMatches);
+      var matches = currentMatches.slice(0, -fromMatches.length).concat(toMatches);
+      var rootMatch = getRootMatch(matches);
       var params = (rootMatch && rootMatch.params) || {};
-      var routes = nextMatches.map(function (match) {
+      var routes = matches.map(function (match) {
         return match.route;
       });
 
       runDidTransitionFromHooks(fromMatches);
       runDidTransitionToHooks(toMatches, query, component);
 
-      if (currentMatches) {
-        currentMatches.forEach(function (match) {
-          match.isStale = true;
-        });
-      }
+      // Mark old matches as "stale" so setProps has no effect.
+      fromMatches.forEach(function (match) {
+        match.isStale = true;
+      });
 
       component.setState({
         path: transition.path,
-        matches: nextMatches,
+        matches: matches,
         activeRoutes: routes,
         activeParams: params,
         activeQuery: query
@@ -322,7 +323,7 @@ function syncWithTransition(component, transition) {
         } catch (error) {
           reject(error);
         }
-      })
+      });
     });
   });
 }
