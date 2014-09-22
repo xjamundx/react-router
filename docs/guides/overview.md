@@ -175,6 +175,7 @@ when the parent's route is matched exactly.
 Note that we don't need the `<Header/>` component since we don't have to
 repeat it anymore. React Router shares that UI for us from one place.
 
+
 More Nesting
 ------------
 
@@ -371,3 +372,13 @@ redirecting transitions, query parameters and more.
   [API]:../api/
   [path-matching]:./path-matching.md
 
+CommonJS Support
+----
+
+For the above examples to work in a CommonJS such as web pack or browserify you'll want to make sure that you reference the appropriate components as follows:
+
+```
+var Router = require('react-router');
+var Route = Router.Route;
+var Routes = Router.Routes;
+```
